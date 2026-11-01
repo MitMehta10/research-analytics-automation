@@ -99,7 +99,7 @@ Toolkit used to automate demographic profiling and segmentation analysis,
 identifying 3 high-value donor segments that reshaped the client's
 go-to-market messaging strategy.
 
-**Archive (in progress)** — Consumer insights study (n≈400) for a B2B
+**Archive (completed)** — Consumer insights study (n≈400) for a B2B
 recommerce platform powering resale for 100+ consumer brands.
 Pipeline automates live AYTM API data ingestion and reporting
 workflows for ongoing fieldwork.
@@ -110,4 +110,4 @@ workflows for ongoing fieldwork.
 ## About
 Mit Mehta | MS Marketing Research & Analytics @ MSU Eli Broad (Aug 2026)
 Seeking full-time roles in Consumer Insights, Marketing Analytics, and Growth Analytics.
-[LinkedIn](https://linkedin.com/in/mitmehta10) | [GitHub](https://github.com/MightyMIT10)
+[LinkedIn](https://linkedin.com/in/mitmehta10) | [GitHub](https://github.com/MitMehta10)
