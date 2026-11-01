@@ -7,9 +7,10 @@ A reusable Python library that automates end-to-end survey data processing —
 from live API ingestion to segmentation analysis, statistical testing, and
 scheduled reporting.
 
-Built to eliminate 15+ hours/week of manual analytics setup across research
-projects — directly inspired by automation work on client studies including
-NexGen Archery (n=401) and Archive (n≈400).
+Built to cut repetitive setup work in survey research: pulling exports, cleaning
+columns, profiling respondents and producing the same summary each time. It grew out
+of my coursework and client-study work in market research; the code here is a
+general-purpose version and contains no client data.
 
 ## What It Does
 
@@ -46,11 +47,12 @@ NexGen Archery (n=401) and Archive (n≈400).
 - Schedules pipeline to run automatically daily via schedule library
 - Eliminates manual triggering of recurring research reports
 
-## Key Results
-- 60% reduction in content production time
-- 50% reduction in per-project analytics setup time
-- Eliminated 15+ hrs/week of manual data processing
-- Reused across 4+ research projects
+## Quality checks
+- 18 automated tests (`pytest`) run in GitHub Actions on every push. They use fake survey data and mocked HTTP responses, so they need no network access or API keys.
+- Statistical helpers are tested against known cases (identical items give Cronbach's alpha of 1.0; clearly separated groups give a significant t-test).
+- The Qualtrics export flow is tested for success, a failed export and a timeout.
+
+> **Not yet verified:** the AYTM endpoint in `fetch_survey_responses_aytm` is written from my own assumptions about their API, so confirm the URL and response shape against AYTM's current documentation before relying on it. The tests prove the code handles the response shape it expects, not that AYTM returns it.
 
 ## Tech Stack
 Python · pandas · NumPy · SciPy · Requests · Schedule · JSON
@@ -63,7 +65,7 @@ from research_automation_toolkit import run_full_pipeline
 # Run once from CSV
 report = run_full_pipeline(
     filepath="survey_data.csv",
-    project_name="NexGen Archery Donor Insights Study",
+    project_name="Donor Insights Study",
     demo_cols=["gender", "region", "income_bracket", "age"],
     key_metrics=["donation_likelihood", "brand_awareness", "interest_score"]
 )
@@ -71,14 +73,14 @@ report = run_full_pipeline(
 # Run from AYTM API directly
 report = run_full_pipeline(
     filepath=None,
-    project_name="Archive Consumer Insights Study",
+    project_name="Consumer Insights Study",
     demo_cols=["gender", "age_group", "region"],
     key_metrics=["trust_score", "platform_preference", "purchase_intent"],
     use_api=True,
     api_config={
         "platform": "aytm",
-        "api_key": "your_api_key_here",
-        "survey_id": "your_survey_id_here"
+        "api_key": None,  # or set the AYTM_API_KEY environment variable
+        "survey_id": "your_survey_id"
     }
 )
 
@@ -92,22 +94,26 @@ schedule_daily_pipeline(
 )
 ```
 
-## Connection to Real Projects
+## Background
+The workflow follows the steps I used on survey projects during my master's program (a donor-insights study and a consumer-insights study of about 400 respondents each): export, clean, profile, segment, test, report. Findings, client names beyond the project titles, and data are intentionally not included here.
 
-**NexGen Archery (completed)** — Donor insights study (n=401).
-Toolkit used to automate demographic profiling and segmentation analysis,
-identifying 3 high-value donor segments that reshaped the client's
-go-to-market messaging strategy.
-
-**Archive (completed)** — Consumer insights study (n≈400) for a B2B
-recommerce platform powering resale for 100+ consumer brands.
-Pipeline automates live AYTM API data ingestion and reporting
-workflows for ongoing fieldwork.
+## Run the tests
+```bash
+pip install -r requirements.txt pytest
+pytest -q
+```
 
 ## Files
-- `research_automation_toolkit.py` — Full Python toolkit with 6 modules
+- `research_automation_toolkit.py` — Python toolkit with 6 modules (single file, importable as shown above)
+- `tests/test_toolkit.py` — unit tests with mocked HTTP
+- `.github/workflows/ci.yml` — runs the tests on push
+
+## Limitations
+- Statistics are limited to an independent-samples t-test and Cronbach's alpha (no multiple-comparison correction, no effect sizes).
+- The scheduler is a simple in-process loop (`schedule` library); use cron or a task runner for anything production-grade.
+- Reports are JSON only.
 
 ## About
-Mit Mehta | MS Marketing Research & Analytics @ MSU Eli Broad (Aug 2026)
-Seeking full-time roles in Consumer Insights, Marketing Analytics, and Growth Analytics.
+Mit Mehta | MS Marketing Research & Analytics @ MSU Eli Broad 
+Seeking full-time roles in Business Analysis, Product, and Consumer Insights / Marketing Analytics.
 [LinkedIn](https://linkedin.com/in/mitmehta10) | [GitHub](https://github.com/MitMehta10)

@@ -9,8 +9,10 @@
 import pandas as pd
 import numpy as np
 from scipy import stats
+import io
 import json
 import os
+import zipfile
 import requests
 import schedule
 import time
@@ -27,11 +29,13 @@ def fetch_survey_responses_aytm(api_key, survey_id):
     Eliminates manual CSV export step entirely.
 
     Args:
-        api_key: AYTM API authentication key
+        api_key: AYTM API authentication key (falls back to the AYTM_API_KEY
+                 environment variable when None)
         survey_id: unique survey identifier
     Returns:
         pandas DataFrame of raw responses
     """
+    api_key = api_key or os.environ.get("AYTM_API_KEY")
     url = f"https://api.aytm.com/v1/surveys/{survey_id}/responses"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -55,52 +59,66 @@ def fetch_survey_responses_aytm(api_key, survey_id):
         return pd.DataFrame()
 
 
-def fetch_survey_responses_qualtrics(api_token, survey_id, data_center):
+def fetch_survey_responses_qualtrics(api_token, survey_id, data_center,
+                                     poll_interval=2, max_wait=300):
     """
-    Fetch survey responses from Qualtrics API.
+    Fetch survey responses from Qualtrics API (v3 export-responses flow:
+    start export -> poll progress -> download the zipped JSON file).
 
     Args:
-        api_token: Qualtrics API token
+        api_token: Qualtrics API token (falls back to the QUALTRICS_API_TOKEN
+                   environment variable when None)
         survey_id: Qualtrics survey ID (SV_xxxxxxxx)
         data_center: Qualtrics data center (e.g. 'fra1', 'iad1')
+        poll_interval: seconds between export-progress checks
+        max_wait: give up after this many seconds
     Returns:
-        pandas DataFrame of raw responses
+        pandas DataFrame of raw responses (empty on failure)
     """
+    api_token = api_token or os.environ.get("QUALTRICS_API_TOKEN")
     base_url = f"https://{data_center}.qualtrics.com/API/v3"
     headers = {
         "X-API-TOKEN": api_token,
         "Content-Type": "application/json"
     }
 
-    # Start export
-    export_url = f"{base_url}/surveys/{survey_id}/export-responses"
-    payload = {"format": "json"}
-
     try:
+        # Start export
         export_response = requests.post(
-            export_url,
+            f"{base_url}/surveys/{survey_id}/export-responses",
             headers=headers,
-            json=payload,
+            json={"format": "json"},
             timeout=30
         )
         export_response.raise_for_status()
         progress_id = export_response.json()['result']['progressId']
 
-        # Check export status
+        # Poll export status until complete, failed, or timed out
         status_url = f"{base_url}/surveys/{survey_id}/export-responses/{progress_id}"
-        status = ""
-        while status != "complete":
-            status_response = requests.get(status_url, headers=headers)
-            status = status_response.json()['result']['status']
-            time.sleep(2)
+        waited = 0
+        while True:
+            status_response = requests.get(status_url, headers=headers, timeout=30)
+            status_response.raise_for_status()
+            result = status_response.json()['result']
+            if result['status'] == "complete":
+                break
+            if result['status'] == "failed":
+                raise RuntimeError("Qualtrics export failed")
+            if waited >= max_wait:
+                raise TimeoutError(f"Qualtrics export not ready after {max_wait}s")
+            time.sleep(poll_interval)
+            waited += poll_interval
 
-        # Download file
-        file_id = status_response.json()['result']['fileId']
-        download_url = f"{base_url}/surveys/{survey_id}/export-responses/{file_id}/file"
-        download = requests.get(download_url, headers=headers)
+        # Download file (Qualtrics returns a zip containing one JSON file)
+        download_url = (f"{base_url}/surveys/{survey_id}/export-responses/"
+                        f"{result['fileId']}/file")
+        download = requests.get(download_url, headers=headers, timeout=60)
+        download.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(download.content)) as zf:
+            json_name = next(n for n in zf.namelist() if n.endswith(".json"))
+            payload = json.loads(zf.read(json_name))
 
-        responses = download.json().get('responses', [])
-        df = pd.DataFrame([r['values'] for r in responses])
+        df = pd.DataFrame([r['values'] for r in payload.get('responses', [])])
         print(f"✓ Fetched {len(df)} responses from Qualtrics — Survey {survey_id}")
         return df
 
@@ -120,13 +138,14 @@ def load_survey_data_csv(filepath):
         cleaned pandas DataFrame
     """
     df = pd.read_csv(filepath)
-    df = df.dropna(how='all')
-    df = df.drop_duplicates()
-    str_cols = df.select_dtypes(include='object').columns
-    df[str_cols] = df[str_cols].apply(lambda x: x.str.strip())
-    df.columns = (df.columns.str.lower()
+    df.columns = (df.columns.str.strip()
+                            .str.lower()
                             .str.replace(' ', '_')
                             .str.replace(':', ''))
+    str_cols = df.select_dtypes(include=['object', 'string']).columns
+    df[str_cols] = df[str_cols].apply(lambda x: x.str.strip())
+    df = df.dropna(how='all')
+    df = df.drop_duplicates()
     print(f"✓ Loaded {len(df)} respondents from CSV — {filepath}")
     return df
 
@@ -389,19 +408,25 @@ def run_full_pipeline(filepath, project_name, demo_cols, key_metrics,
     print("="*50)
 
     # Step 1 — Ingest data
-    if use_api and api_config:
+    if use_api and not api_config:
+        print("✗ Pipeline aborted — use_api=True requires api_config")
+        return None
+    if use_api:
         platform = api_config.get('platform', 'aytm')
         if platform == 'aytm':
             df = fetch_survey_responses_aytm(
-                api_config['api_key'],
+                api_config.get('api_key'),
                 api_config['survey_id']
             )
         elif platform == 'qualtrics':
             df = fetch_survey_responses_qualtrics(
-                api_config['api_token'],
+                api_config.get('api_token'),
                 api_config['survey_id'],
                 api_config['data_center']
             )
+        else:
+            print(f"✗ Pipeline aborted — unknown platform: {platform}")
+            return None
     else:
         df = load_survey_data_csv(filepath)
 
@@ -467,7 +492,7 @@ if __name__ == "__main__":
     # Option A — Run once from CSV
     report = run_full_pipeline(
         filepath="survey_data.csv",
-        project_name="NexGen Archery Donor Insights Study",
+        project_name="Donor Insights Study",
         demo_cols=["gender", "region", "income_bracket", "age"],
         key_metrics=["donation_likelihood", "brand_awareness", "interest_score"]
     )
@@ -475,7 +500,7 @@ if __name__ == "__main__":
     # Option B — Run once from AYTM API
     # report = run_full_pipeline(
     #     filepath=None,
-    #     project_name="Archive Consumer Insights Study",
+    #     project_name="Consumer Insights Study",
     #     demo_cols=["gender", "age_group", "region"],
     #     key_metrics=["trust_score", "platform_preference", "purchase_intent"],
     #     use_api=True,
